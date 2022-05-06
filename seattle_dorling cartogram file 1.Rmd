@@ -1,0 +1,367 @@
+---
+title: "Seattle Dorling Cartogram"
+author: "Kidist Gondel"
+date: "05/04/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+ I got some of the codes from previous lab 
+
+```{r}
+library( geojsonio )   # read shapefiles
+library( sp )          # work with shapefiles
+library( sf )          # work with shapefiles - simple features format
+library( mclust )      # cluster analysis 
+library( tmap )        # theme maps
+library( ggplot2 )     # graphing 
+library( ggthemes )    # nice formats for ggplots
+library( dplyr )       # data wrangling 
+library( pander )      # formatting RMD tables
+library( tidycensus )
+library( cartogram )  # spatial maps w/ tract size bias reduction
+library( maptools )   # spatial object manipulation 
+library(stringr)
+library(fun)
+library(mclust)
+```
+
+
+
+
+```{r, include=FALSE}
+crosswalk <- read.csv( "https://raw.githubusercontent.com/DS4PS/cpp-529-master/master/data/cbsatocountycrosswalk.csv",
+                       stringsAsFactors=F, colClasses="character" )
+```
+
+
+
+```{r}
+
+grep( "^SE", crosswalk$msaname, value=TRUE ) 
+
+```
+
+```{r}
+these.msp <- crosswalk$msaname == "SEATTLE-BELLEVUE-EVERETT, WA"
+these.fips <- crosswalk$fipscounty[ these.msp ]
+these.fips <- na.omit( these.fips )
+head(these.fips) %>% pander()
+```
+
+
+
+
+```{r}
+library( tidycensus )
+
+#census_api_key("07637a4c834edd32138aa569307d131bb08c7d53" , install = TRUE)
+```
+
+
+
+```{r}
+these.msp <- crosswalk$msaname == "SEATTLE-BELLEVUE-EVERETT, WA"
+these.fips <- crosswalk$fipscounty[ these.msp ]
+these.fips <- na.omit( these.fips )
+
+head( these.fips ) %>% pander()
+
+```
+
+
+```{r}
+
+state.fips <- substr( these.fips, 1, 2 )
+county.fips <- substr( these.fips, 3, 5 )
+
+cbind( these.fips, state.fips, county.fips ) %>% pander()
+```
+
+
+
+
+
+```{r}
+msp.pop <-get_acs( geography = "tract", variables = "B01003_001",
+         state = "53", county = county.fips[state.fips=="53"], geometry = TRUE ) %>% 
+         select( GEOID, estimate ) %>%
+         rename( POP=estimate )
+head(msp.pop)
+```
+
+
+
+
+
+
+```{r}
+
+
+# Add in and combine with census data
+
+URL <- "https://github.com/DS4PS/cpp-529-master/raw/master/data/ltdb_std_2010_sample.rds"
+
+census.dat <- readRDS(gzcon(url( URL )))
+
+# Make the data numeric
+msp.pop$GEOID <- as.numeric(msp.pop$GEOID)
+
+# Merge an sf object and data.frame
+msp <- merge( msp.pop, census.dat, by.x="GEOID", by.y="tractid" )
+
+head(msp)
+
+```
+
+
+
+
+
+
+```{r}
+
+msp <- msp.pop
+
+msp<- msp [! st_is_empty(msp), ]
+
+# convert sf map object to an sp version
+msp.sp <- as_Spatial( msp )
+
+class( msp.sp )
+```
+
+
+```{r}
+
+plot( msp.sp )
+```
+
+
+
+```{r}
+
+# project map and remove empty tracts
+msp.sp <- spTransform( msp.sp, CRS("+init=epsg:3395"))
+msp.sp <- msp.sp[ msp.sp$POP != 0 & (! is.na( msp.sp$POP )) , ]
+
+# convert census tract polygons to dorling cartogram
+# no idea why k=0.03 works, but it does - default is k=5
+
+msp.sp$pop.w <- msp.sp$POP / 9000 # max(msp.sp$POP)   # standardizes it to max of 1.5
+msp_dorling <- cartogram_dorling( x=msp.sp, weight="pop.w", k=0.05 )
+
+plot( msp_dorling )
+
+```
+
+
+```{r}
+class(msp_dorling)
+```
+
+
+```{r}
+bb <- st_bbox( c( xmin =  -13656745, xmax = -13541060, 
+                  ymax = 6137419, ymin = 5935377 ), 
+               crs = st_crs("+init=epsg:3395"))
+
+tm_shape( msp_dorling, bbox=bb ) + 
+tm_polygons( col="POP", n=10, style="quantile", palette="Spectral" ) +
+tm_layout( "Beautiful Seattle Dorling Cartogram", title.position=c("right","top") )
+```
+
+
+
+
+```{r}
+
+
+d1 <- msp_dorling@data
+
+
+keep.these <- c("pnhwht12", "pnhblk12", "phisp12", "pntv12", "pfb12", "polang12", "phs12", "pcol12", "punemp12", "pflabf12", "pprof12", "pmanuf12", "pvet12", "psemp12", "hinc12", "incpc12", "ppov12", "pown12", "pvac12", "pmulti12", "mrent12", "mhmval12", "p30old12", "p10yrs12", "p18und12", "p60up12", "p75up12", "pmar12", "pwds12", "pfhh12")
+
+#d1 <- msp_dorling@data
+
+
+
+#URL <- "https://github.com/DS4PS/cpp-529-master/raw/master/data/ltdb_std_2010_sample.rds"
+#census.dat <- readRDS(gzcon(url( URL )))
+
+#d1 <- merge(d1, census.dat, by.x="GEODI", by.y="tractid")
+
+d2 <- select( d1, keep.these )
+
+d3 <- apply( d2, 2, scale )
+
+head( d3[,1:6] ) %>% pander()
+
+
+```
+
+
+
+
+ CLASSIFICATIOn
+
+
+ 
+```{r}
+
+# library( mclust )
+set.seed( 1234 )
+fit <- Mclust( d3 )
+msp_dorling$cluster <- as.factor( fit$classification )
+summary( fit )
+```
+
+ADD CENSUS DATA
+
+
+
+
+```{r}
+URL1 <- "https://github.com/DS4PS/cpp-529-fall-2020/raw/main/LABS/data/rodeo/LTDB-2000.rds"
+d1 <- readRDS( gzcon( url( URL1 ) ) )
+ 
+URL2 <- "https://github.com/DS4PS/cpp-529-fall-2020/raw/main/LABS/data/rodeo/LTDB-2010.rds"
+d2 <- readRDS( gzcon( url( URL2 ) ) )
+ 
+URLmd <- "https://github.com/DS4PS/cpp-529-fall-2020/raw/main/LABS/data/rodeo/LTDB-META-DATA.rds"
+md <- readRDS( gzcon( url( URLmd ) ) )
+
+d1 <- select( d1, - year )
+d2 <- select( d2, - year )
+ 
+d <- merge( d1, d2, by="tractid" )
+d <- merge( d, md, by="tractid" )
+```
+
+
+
+
+```{r}
+
+
+d <- select( d, tractid, 
+             mhmval00, mhmval12, 
+             hinc00, 
+             hu00, vac00, own00, rent00, h30old00,
+             empclf00, clf00, unemp00, prof00,  
+             dpov00, npov00,
+             ag25up00, hs00, col00, 
+             pop00.x, nhwht00, nhblk00, hisp00, asian00,
+             cbsa, cbsaname )
+
+ 
+d <- 
+  d %>%
+  mutate( # percent white in 2000
+          p.white = 100 * nhwht00 / pop00.x,
+          # percent black in 2000
+          p.black = 100 * nhblk00 / pop00.x,
+          # percent hispanic in 2000
+          p.hisp = 100 * hisp00 / pop00.x, 
+          # percent asian in 2000
+          p.asian = 100 * asian00 / pop00.x,
+          # percent high school grads by age 25 in 2000 
+          p.hs = 100 * (hs00+col00) / ag25up00,
+          # percent pop with college degree in 2000
+          p.col = 100 * col00 / ag25up00,
+          # percent employed in professional fields in 2000
+          p.prof = 100 * prof00 / empclf00,
+          # percent unemployment  in 2000
+          p.unemp = 100 * unemp00 / clf00,
+          # percent of housing lots in tract that are vacant in 2000
+          p.vacant = 100 * vac00 / hu00,
+          # dollar change in median home value 2000 to 2010 
+          pov.rate = 100 * npov00 / dpov00 )
+
+
+# adjust 2000 home values for inflation 
+mhv.00 <- d$mhmval00 * 1.28855  
+mhv.10 <- d$mhmval12
+
+# change in MHV in dollars
+mhv.change <- mhv.10 - mhv.00
+
+
+# drop low 2000 median home values
+# to avoid unrealistic growth rates.
+#
+# tracts with homes that cost less than
+# $1,000 are outliers
+mhv.00[ mhv.00 < 1000 ] <- NA
+
+# change in MHV in percent
+mhv.growth <- 100 * ( mhv.change / mhv.00 )
+
+d$mhv.00 <- mhv.00
+d$mhv.10 <- mhv.10
+d$mhv.change <- mhv.change
+d$mhv.growth <- mhv.growth 
+
+```
+
+
+
+
+```{r}
+
+
+# STANDARDIZE GEO IDs
+
+# Note the current geoid format for the LTDB census data: FIPS-STATE-COUNTY-TRACT:  fips-01-001-020100  
+
+x <- d$tractid 
+
+# Remove non-numeric strings 
+x <- gsub( "fips", "", x )
+x <- gsub( "-", "", x )
+
+# Drop leading zeros 
+x <- as.numeric( x )
+
+# Remember to add the variable back to the census dataset
+d$tractid2 <- x 
+
+msp <- merge( msp_dorling, d, by.x="GEOID", by.y="tractid2", all.x=T )
+
+head( msp@data ) %>% pander()
+
+```
+
+
+
+
+```{r}
+
+
+row.ids <- sapply( slot( msp, "polygons" ), function(x) slot( x, "ID" ) )
+row.names( msp ) <- row.ids
+
+msp <- spTransform( msp, CRS("+proj=longlat +datum=WGS84") )
+
+# Write to file 
+geojson_write( msp, file="msp_dorling.geojson", geometry="polygon" )
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
